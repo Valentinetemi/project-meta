@@ -1,5 +1,11 @@
 import * as THREE from 'three'
+import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
 import './style.css'
+
+const MEDIAPIPE_WASM_ROOT =
+  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm'
+const SELFIE_SEGMENTER_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite'
 
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x0b0d12)
@@ -51,9 +57,31 @@ webcamCanvas.height = 240
 visionOverlays.appendChild(webcamCanvas)
 
 const webcamContext = webcamCanvas.getContext('2d')
+let imageSegmenter
+let lastSegmentedVideoTime = -1
+
+async function loadImageSegmenter() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_ROOT)
+    imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: SELFIE_SEGMENTER_MODEL },
+      runningMode: 'VIDEO',
+      outputCategoryMask: true,
+      outputConfidenceMasks: false,
+    })
+  } catch (error) {
+    showCameraMessage('Selfie segmentation is unavailable.')
+    console.error('Unable to load selfie segmentation:', error)
+  }
+}
 
 function renderWebcamFrame() {
   webcamContext.drawImage(video, 0, 0, webcamCanvas.width, webcamCanvas.height)
+
+  if (imageSegmenter && video.currentTime !== lastSegmentedVideoTime) {
+    lastSegmentedVideoTime = video.currentTime
+    imageSegmenter.segmentForVideo(video, performance.now(), () => {})
+  }
 
   if ('requestVideoFrameCallback' in video) {
     video.requestVideoFrameCallback(renderWebcamFrame)
@@ -61,6 +89,8 @@ function renderWebcamFrame() {
     requestAnimationFrame(renderWebcamFrame)
   }
 }
+
+loadImageSegmenter()
 
 function showCameraMessage(message) {
   const cameraMessage = document.createElement('p')
