@@ -213,7 +213,17 @@ async function estimateCurrentFrame(depthEstimator) {
   return depthEstimator(depthInputCanvas)
 }
 
-async function runDepthOnce(cameraReady) {
+function waitForNextVideoFrame() {
+  return new Promise((resolve) => {
+    if ('requestVideoFrameCallback' in video) {
+      video.requestVideoFrameCallback(() => resolve())
+    } else {
+      requestAnimationFrame(() => resolve())
+    }
+  })
+}
+
+async function runDepthLoop(cameraReady) {
   const [cameraStarted, depthEstimator] = await Promise.all([
     cameraReady,
     depthModelReady,
@@ -221,18 +231,44 @@ async function runDepthOnce(cameraReady) {
 
   if (!cameraStarted || !depthEstimator) return
 
-  try {
-    const { predicted_depth: predictedDepth } =
-      await estimateCurrentFrame(depthEstimator)
-    const { width, height, min, max } = getDepthStats(predictedDepth)
+  let depthFrameRate = 0
+  let lastDepthFrameTime = 0
+  let hasLoggedDepthStats = false
 
-    console.log(
-      `Depth output: ${width}x${height}, min=${min.toFixed(4)}, max=${max.toFixed(4)}`,
-    )
-    depthStatus.textContent = `Depth frame ${width}×${height} · ${activeDepthBackend}`
-  } catch (error) {
-    depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
-    console.error('Unable to estimate depth:', error)
+  while (video.srcObject) {
+    await waitForNextVideoFrame()
+
+    try {
+      const { predicted_depth: predictedDepth } =
+        await estimateCurrentFrame(depthEstimator)
+      const { width, height, min, max } = getDepthStats(predictedDepth)
+      const now = performance.now()
+      const instantaneousFrameRate = lastDepthFrameTime
+        ? 1000 / (now - lastDepthFrameTime)
+        : 0
+
+      lastDepthFrameTime = now
+      depthFrameRate = depthFrameRate
+        ? depthFrameRate * 0.8 + instantaneousFrameRate * 0.2
+        : instantaneousFrameRate
+
+      if (!hasLoggedDepthStats) {
+        console.log(
+          `Depth output: ${width}x${height}, min=${min.toFixed(4)}, max=${max.toFixed(4)}`,
+        )
+        hasLoggedDepthStats = true
+      }
+
+      depthStatus.textContent =
+        `Depth ${width}×${height} · ${activeDepthBackend} · ` +
+        `${depthFrameRate.toFixed(1)} FPS`
+      depthStatus.dataset.backend = activeDepthBackend
+      depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
+    } catch (error) {
+      depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
+      console.error('Unable to estimate depth:', error)
+      return
+    }
   }
 }
 
@@ -275,7 +311,7 @@ async function startCamera() {
 }
 
 const cameraReady = startCamera()
-runDepthOnce(cameraReady)
+runDepthLoop(cameraReady)
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
