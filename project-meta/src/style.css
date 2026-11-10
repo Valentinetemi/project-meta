@@ -14,3 +14,19 @@ body {
 canvas {
   display: block;
 }
+
+.camera-message {
+  position: fixed;
+  z-index: 1;
+  bottom: 16px;
+  left: 50%;
+  margin: 0;
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 6px;
+  color: #fff;
+  background: rgb(0 0 0 / 70%);
+  font: 14px/1.4 system-ui, sans-serif;
+  white-space: nowrap;
+}

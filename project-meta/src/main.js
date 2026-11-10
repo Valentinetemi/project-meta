@@ -32,6 +32,50 @@ function animate() {
 
 renderer.setAnimationLoop(animate)
 
+const video = document.createElement('video')
+video.autoplay = true
+video.muted = true
+video.playsInline = true
+video.hidden = true
+video.setAttribute('aria-hidden', 'true')
+document.body.appendChild(video)
+
+function showCameraMessage(message) {
+  const cameraMessage = document.createElement('p')
+  cameraMessage.className = 'camera-message'
+  cameraMessage.textContent = message
+  document.body.appendChild(cameraMessage)
+}
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        facingMode: 'user',
+      },
+    })
+
+    video.srcObject = stream
+    await video.play()
+
+    console.log(`Webcam video size: ${video.videoWidth}x${video.videoHeight}`)
+  } catch (error) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+      showCameraMessage('Camera permission was denied.')
+    } else if (error.name === 'NotFoundError') {
+      showCameraMessage('No camera was found.')
+    } else {
+      showCameraMessage('Camera access is unavailable.')
+      console.error('Unable to start the camera:', error)
+    }
+  }
+}
+
+startCamera()
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
   camera.updateProjectionMatrix()
