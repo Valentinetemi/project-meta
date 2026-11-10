@@ -40,6 +40,28 @@ video.hidden = true
 video.setAttribute('aria-hidden', 'true')
 document.body.appendChild(video)
 
+const visionOverlays = document.createElement('div')
+visionOverlays.className = 'vision-overlays'
+document.body.appendChild(visionOverlays)
+
+const webcamCanvas = document.createElement('canvas')
+webcamCanvas.className = 'webcam-overlay'
+webcamCanvas.width = 320
+webcamCanvas.height = 240
+visionOverlays.appendChild(webcamCanvas)
+
+const webcamContext = webcamCanvas.getContext('2d')
+
+function renderWebcamFrame() {
+  webcamContext.drawImage(video, 0, 0, webcamCanvas.width, webcamCanvas.height)
+
+  if ('requestVideoFrameCallback' in video) {
+    video.requestVideoFrameCallback(renderWebcamFrame)
+  } else {
+    requestAnimationFrame(renderWebcamFrame)
+  }
+}
+
 function showCameraMessage(message) {
   const cameraMessage = document.createElement('p')
   cameraMessage.className = 'camera-message'
@@ -62,6 +84,7 @@ async function startCamera() {
     await video.play()
 
     console.log(`Webcam video size: ${video.videoWidth}x${video.videoHeight}`)
+    renderWebcamFrame()
   } catch (error) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
       showCameraMessage('Camera permission was denied.')
