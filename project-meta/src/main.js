@@ -76,11 +76,48 @@ async function loadImageSegmenter() {
 }
 
 function renderWebcamFrame() {
-  webcamContext.drawImage(video, 0, 0, webcamCanvas.width, webcamCanvas.height)
-
   if (imageSegmenter && video.currentTime !== lastSegmentedVideoTime) {
     lastSegmentedVideoTime = video.currentTime
-    imageSegmenter.segmentForVideo(video, performance.now(), () => {})
+    imageSegmenter.segmentForVideo(video, performance.now(), (result) => {
+      const categoryMask = result.categoryMask
+
+      if (!categoryMask) {
+        webcamContext.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height)
+        return
+      }
+
+      webcamContext.drawImage(
+        video,
+        0,
+        0,
+        webcamCanvas.width,
+        webcamCanvas.height,
+      )
+
+      const frame = webcamContext.getImageData(
+        0,
+        0,
+        webcamCanvas.width,
+        webcamCanvas.height,
+      )
+      const mask = categoryMask.getAsUint8Array()
+
+      for (let y = 0; y < webcamCanvas.height; y += 1) {
+        const maskY = Math.floor((y / webcamCanvas.height) * categoryMask.height)
+
+        for (let x = 0; x < webcamCanvas.width; x += 1) {
+          const maskX = Math.floor((x / webcamCanvas.width) * categoryMask.width)
+          const maskIndex = maskY * categoryMask.width + maskX
+          const alphaIndex = (y * webcamCanvas.width + x) * 4 + 3
+
+          frame.data[alphaIndex] = mask[maskIndex] === 1 ? 255 : 0
+        }
+      }
+
+      webcamContext.putImageData(frame, 0, 0)
+    })
+  } else if (!imageSegmenter) {
+    webcamContext.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height)
   }
 
   if ('requestVideoFrameCallback' in video) {
