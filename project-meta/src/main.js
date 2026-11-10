@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
+import { pipeline } from '@huggingface/transformers'
 import './style.css'
 
 const MEDIAPIPE_WASM_ROOT =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm'
 const SELFIE_SEGMENTER_MODEL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite'
+const DEPTH_MODEL = 'onnx-community/depth-anything-v2-small'
 
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x0b0d12)
@@ -49,6 +51,13 @@ document.body.appendChild(video)
 const visionOverlays = document.createElement('div')
 visionOverlays.className = 'vision-overlays'
 document.body.appendChild(visionOverlays)
+
+const depthStatus = document.createElement('p')
+depthStatus.className = 'depth-status'
+depthStatus.setAttribute('role', 'status')
+depthStatus.setAttribute('aria-live', 'polite')
+depthStatus.textContent = 'Loading Depth Anything V2…'
+document.body.appendChild(depthStatus)
 
 const webcamCanvas = document.createElement('canvas')
 webcamCanvas.className = 'webcam-overlay'
@@ -128,6 +137,27 @@ function renderWebcamFrame() {
 }
 
 loadImageSegmenter()
+
+async function loadDepthModel() {
+  try {
+    const depthEstimator = await pipeline('depth-estimation', DEPTH_MODEL, {
+      progress_callback: (progress) => {
+        if (progress.status === 'progress' && Number.isFinite(progress.progress)) {
+          depthStatus.textContent = `Loading Depth Anything V2… ${Math.round(progress.progress)}%`
+        }
+      },
+    })
+
+    depthStatus.textContent = 'Depth Anything V2 ready'
+    return depthEstimator
+  } catch (error) {
+    depthStatus.textContent = 'Depth model failed to load'
+    console.error('Unable to load Depth Anything V2:', error)
+    return null
+  }
+}
+
+const depthModelReady = loadDepthModel()
 
 function showCameraMessage(message) {
   const cameraMessage = document.createElement('p')
