@@ -66,6 +66,15 @@ webcamCanvas.height = 240
 visionOverlays.appendChild(webcamCanvas)
 
 const webcamContext = webcamCanvas.getContext('2d')
+
+const depthDebugCanvas = document.createElement('canvas')
+depthDebugCanvas.className = 'depth-debug'
+depthDebugCanvas.width = 320
+depthDebugCanvas.height = 240
+depthDebugCanvas.title = 'Press D to toggle the depth debug view'
+visionOverlays.appendChild(depthDebugCanvas)
+
+const depthDebugContext = depthDebugCanvas.getContext('2d')
 let imageSegmenter
 let lastSegmentedVideoTime = -1
 
@@ -199,6 +208,30 @@ function getDepthStats(predictedDepth) {
   return { width, height, min, max }
 }
 
+function drawDepthDebugView(predictedDepth, stats) {
+  const { width, height, min, max } = stats
+  const range = max - min || 1
+
+  if (depthDebugCanvas.width !== width || depthDebugCanvas.height !== height) {
+    depthDebugCanvas.width = width
+    depthDebugCanvas.height = height
+  }
+
+  const imageData = depthDebugContext.createImageData(width, height)
+
+  for (let index = 0; index < predictedDepth.data.length; index += 1) {
+    const shade = Math.round(((predictedDepth.data[index] - min) / range) * 255)
+    const pixelIndex = index * 4
+
+    imageData.data[pixelIndex] = shade
+    imageData.data[pixelIndex + 1] = shade
+    imageData.data[pixelIndex + 2] = shade
+    imageData.data[pixelIndex + 3] = 255
+  }
+
+  depthDebugContext.putImageData(imageData, 0, 0)
+}
+
 async function estimateCurrentFrame(depthEstimator) {
   depthInputCanvas.width = video.videoWidth
   depthInputCanvas.height = video.videoHeight
@@ -241,7 +274,8 @@ async function runDepthLoop(cameraReady) {
     try {
       const { predicted_depth: predictedDepth } =
         await estimateCurrentFrame(depthEstimator)
-      const { width, height, min, max } = getDepthStats(predictedDepth)
+      const stats = getDepthStats(predictedDepth)
+      const { width, height, min, max } = stats
       const now = performance.now()
       const instantaneousFrameRate = lastDepthFrameTime
         ? 1000 / (now - lastDepthFrameTime)
@@ -259,9 +293,11 @@ async function runDepthLoop(cameraReady) {
         hasLoggedDepthStats = true
       }
 
+      drawDepthDebugView(predictedDepth, stats)
+
       depthStatus.textContent =
         `Depth ${width}×${height} · ${activeDepthBackend} · ` +
-        `${depthFrameRate.toFixed(1)} FPS`
+        `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
       depthStatus.dataset.backend = activeDepthBackend
       depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
     } catch (error) {
@@ -312,6 +348,13 @@ async function startCamera() {
 
 const cameraReady = startCamera()
 runDepthLoop(cameraReady)
+
+window.addEventListener('keydown', (event) => {
+  if (event.key.toLowerCase() !== 'd' || event.repeat) return
+
+  depthDebugCanvas.hidden = !depthDebugCanvas.hidden
+  depthStatus.dataset.debugVisible = String(!depthDebugCanvas.hidden)
+})
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
