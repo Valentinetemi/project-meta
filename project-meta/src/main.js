@@ -180,6 +180,62 @@ async function loadDepthModel() {
 let activeDepthBackend = 'Loading'
 const depthModelReady = loadDepthModel()
 
+const depthInputCanvas = document.createElement('canvas')
+const depthInputContext = depthInputCanvas.getContext('2d')
+
+function getDepthStats(predictedDepth) {
+  const values = predictedDepth.data
+  let min = Infinity
+  let max = -Infinity
+
+  for (const value of values) {
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  }
+
+  const height = predictedDepth.dims.at(-2)
+  const width = predictedDepth.dims.at(-1)
+
+  return { width, height, min, max }
+}
+
+async function estimateCurrentFrame(depthEstimator) {
+  depthInputCanvas.width = video.videoWidth
+  depthInputCanvas.height = video.videoHeight
+  depthInputContext.drawImage(
+    video,
+    0,
+    0,
+    depthInputCanvas.width,
+    depthInputCanvas.height,
+  )
+
+  return depthEstimator(depthInputCanvas)
+}
+
+async function runDepthOnce(cameraReady) {
+  const [cameraStarted, depthEstimator] = await Promise.all([
+    cameraReady,
+    depthModelReady,
+  ])
+
+  if (!cameraStarted || !depthEstimator) return
+
+  try {
+    const { predicted_depth: predictedDepth } =
+      await estimateCurrentFrame(depthEstimator)
+    const { width, height, min, max } = getDepthStats(predictedDepth)
+
+    console.log(
+      `Depth output: ${width}x${height}, min=${min.toFixed(4)}, max=${max.toFixed(4)}`,
+    )
+    depthStatus.textContent = `Depth frame ${width}×${height} · ${activeDepthBackend}`
+  } catch (error) {
+    depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
+    console.error('Unable to estimate depth:', error)
+  }
+}
+
 function showCameraMessage(message) {
   const cameraMessage = document.createElement('p')
   cameraMessage.className = 'camera-message'
@@ -203,6 +259,7 @@ async function startCamera() {
 
     console.log(`Webcam video size: ${video.videoWidth}x${video.videoHeight}`)
     renderWebcamFrame()
+    return true
   } catch (error) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
       showCameraMessage('Camera permission was denied.')
@@ -212,10 +269,13 @@ async function startCamera() {
       showCameraMessage('Camera access is unavailable.')
       console.error('Unable to start the camera:', error)
     }
+
+    return false
   }
 }
 
-startCamera()
+const cameraReady = startCamera()
+runDepthOnce(cameraReady)
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
