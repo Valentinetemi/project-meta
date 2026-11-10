@@ -3,6 +3,9 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   plugins: [basicSsl()],
+  build: {
+    cssMinify: 'esbuild',
+  },
   server: {
     host: true,
   },

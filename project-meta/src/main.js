@@ -139,24 +139,45 @@ function renderWebcamFrame() {
 loadImageSegmenter()
 
 async function loadDepthModel() {
-  try {
-    const depthEstimator = await pipeline('depth-estimation', DEPTH_MODEL, {
+  const loadForBackend = (device, label) => {
+    depthStatus.textContent = `Loading Depth Anything V2 (${label})…`
+
+    return pipeline('depth-estimation', DEPTH_MODEL, {
+      device,
       progress_callback: (progress) => {
         if (progress.status === 'progress' && Number.isFinite(progress.progress)) {
-          depthStatus.textContent = `Loading Depth Anything V2… ${Math.round(progress.progress)}%`
+          depthStatus.textContent = `Loading Depth Anything V2 (${label})… ${Math.round(progress.progress)}%`
         }
       },
     })
+  }
 
-    depthStatus.textContent = 'Depth Anything V2 ready'
+  try {
+    if ('gpu' in navigator) {
+      try {
+        const depthEstimator = await loadForBackend('webgpu', 'WebGPU')
+        activeDepthBackend = 'WebGPU'
+        depthStatus.textContent = `Depth model ready · ${activeDepthBackend}`
+        return depthEstimator
+      } catch (error) {
+        console.warn('WebGPU depth initialization failed; using WASM:', error)
+        depthStatus.textContent = 'WebGPU unavailable · falling back to WASM…'
+      }
+    }
+
+    const depthEstimator = await loadForBackend('wasm', 'WASM')
+    activeDepthBackend = 'WASM'
+    depthStatus.textContent = `Depth model ready · ${activeDepthBackend}`
     return depthEstimator
   } catch (error) {
+    activeDepthBackend = 'Unavailable'
     depthStatus.textContent = 'Depth model failed to load'
     console.error('Unable to load Depth Anything V2:', error)
     return null
   }
 }
 
+let activeDepthBackend = 'Loading'
 const depthModelReady = loadDepthModel()
 
 function showCameraMessage(message) {
