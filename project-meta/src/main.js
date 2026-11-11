@@ -36,15 +36,16 @@ scene.add(cube)
 
 const pointCloudGeometry = new THREE.BufferGeometry()
 const pointCloudMaterial = new THREE.PointsMaterial({
-  color: 0xffffff,
   size: 0.01,
   sizeAttenuation: true,
+  vertexColors: true,
 })
 const pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial)
 pointCloud.frustumCulled = false
 scene.add(pointCloud)
 
 let pointCloudPositions = new Float32Array()
+let pointCloudColors = new Float32Array()
 let pointCloudSourcePixelIndices = new Uint32Array()
 let allPixelsMask = new Uint8Array()
 
@@ -52,10 +53,15 @@ function ensurePointCloudCapacity(maxPointCount) {
   if (pointCloudSourcePixelIndices.length >= maxPointCount) return
 
   pointCloudPositions = new Float32Array(maxPointCount * 3)
+  pointCloudColors = new Float32Array(maxPointCount * 3)
   pointCloudSourcePixelIndices = new Uint32Array(maxPointCount)
   pointCloudGeometry.setAttribute(
     'position',
     new THREE.BufferAttribute(pointCloudPositions, 3),
+  )
+  pointCloudGeometry.setAttribute(
+    'color',
+    new THREE.BufferAttribute(pointCloudColors, 3),
   )
   pointCloudGeometry.setDrawRange(0, 0)
 }
@@ -84,6 +90,41 @@ function updatePointCloudGeometry(predictedDepth) {
 
   pointCloudGeometry.attributes.position.needsUpdate = true
   pointCloudGeometry.setDrawRange(0, count)
+
+  return { count, width, height }
+}
+
+function updatePointCloudColors(pointCount, depthWidth, depthHeight) {
+  const frameWidth = depthInputCanvas.width
+  const frameHeight = depthInputCanvas.height
+  const frame = depthInputContext.getImageData(
+    0,
+    0,
+    frameWidth,
+    frameHeight,
+  )
+
+  for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
+    const sourceIndex = pointCloudSourcePixelIndices[pointIndex]
+    const depthX = sourceIndex % depthWidth
+    const depthY = Math.floor(sourceIndex / depthWidth)
+    const frameX = Math.min(
+      Math.floor(((depthX + 0.5) / depthWidth) * frameWidth),
+      frameWidth - 1,
+    )
+    const frameY = Math.min(
+      Math.floor(((depthY + 0.5) / depthHeight) * frameHeight),
+      frameHeight - 1,
+    )
+    const frameIndex = (frameY * frameWidth + frameX) * 4
+    const colorIndex = pointIndex * 3
+
+    pointCloudColors[colorIndex] = frame.data[frameIndex] / 255
+    pointCloudColors[colorIndex + 1] = frame.data[frameIndex + 1] / 255
+    pointCloudColors[colorIndex + 2] = frame.data[frameIndex + 2] / 255
+  }
+
+  pointCloudGeometry.attributes.color.needsUpdate = true
 }
 
 function animate() {
@@ -349,7 +390,12 @@ async function runDepthLoop(cameraReady) {
       }
 
       drawDepthDebugView(predictedDepth, stats)
-      updatePointCloudGeometry(predictedDepth)
+      const pointCloudFrame = updatePointCloudGeometry(predictedDepth)
+      updatePointCloudColors(
+        pointCloudFrame.count,
+        pointCloudFrame.width,
+        pointCloudFrame.height,
+      )
 
       depthStatus.textContent =
         `Depth ${width}×${height} · ${activeDepthBackend} · ` +
