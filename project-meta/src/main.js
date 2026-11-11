@@ -35,13 +35,6 @@ controls.minDistance = 0.3
 controls.maxDistance = 8
 controls.update()
 
-const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(1, 1, 1),
-  new THREE.MeshNormalMaterial(),
-)
-cube.position.set(1.5, 0, -3)
-scene.add(cube)
-
 const pointCloudGeometry = new THREE.BufferGeometry()
 const pointCloudMaterial = new THREE.PointsMaterial({
   size: 0.01,
@@ -61,6 +54,8 @@ document.body.appendChild(fpsCounter)
 let pointCloudPositions = new Float32Array()
 let pointCloudColors = new Float32Array()
 let pointCloudSourcePixelIndices = new Uint32Array()
+let fullFrameMask = new Uint8Array()
+let hasLoggedPointCloud = false
 let depthFrameRate = 0
 let renderFrameRate = 0
 let lastRenderFrameTime = 0
@@ -90,14 +85,17 @@ function updatePointCloudGeometry(predictedDepth, personMask) {
 
   ensurePointCloudCapacity(maxPointCount)
 
-  if (!personMask) {
-    pointCloudGeometry.setDrawRange(0, 0)
-    return { count: 0, width, height }
+  if (!personMask && fullFrameMask.length !== maxPointCount) {
+    fullFrameMask = new Uint8Array(maxPointCount)
+    fullFrameMask.fill(1)
   }
+
+  const activeMask =
+    personMask ?? { data: fullFrameMask, width, height }
 
   const { count } = backProjectDepthTo3D(
     predictedDepth,
-    personMask,
+    activeMask,
     createCameraIntrinsics(video.videoWidth, video.videoHeight),
     {
       positions: pointCloudPositions,
@@ -108,6 +106,11 @@ function updatePointCloudGeometry(predictedDepth, personMask) {
   pointCloudGeometry.attributes.position.needsUpdate = true
   pointCloudGeometry.setDrawRange(0, count)
   pointCloudGeometry.userData.livePointCount = count
+
+  if (count > 0 && !hasLoggedPointCloud) {
+    console.info(`Point cloud rendered with ${count} points.`)
+    hasLoggedPointCloud = true
+  }
 
   return { count, width, height }
 }
@@ -164,8 +167,6 @@ function animate(now) {
     lastFpsDisplayTime = now
   }
 
-  cube.rotation.x += 0.01
-  cube.rotation.y += 0.01
   controls.update()
 
   renderer.render(scene, camera)
