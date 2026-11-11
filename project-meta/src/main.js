@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
 import { pipeline } from '@huggingface/transformers'
+import { createCameraIntrinsics } from './camera-intrinsics.js'
 import './style.css'
 
 const MEDIAPIPE_WASM_ROOT =
@@ -330,6 +331,10 @@ async function startCamera() {
     await video.play()
 
     console.log(`Webcam video size: ${video.videoWidth}x${video.videoHeight}`)
+    console.log(
+      'Camera intrinsics (60° horizontal FOV):',
+      createCameraIntrinsics(video.videoWidth, video.videoHeight),
+    )
     renderWebcamFrame()
     return true
   } catch (error) {
