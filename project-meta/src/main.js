@@ -47,7 +47,6 @@ scene.add(pointCloud)
 let pointCloudPositions = new Float32Array()
 let pointCloudColors = new Float32Array()
 let pointCloudSourcePixelIndices = new Uint32Array()
-let allPixelsMask = new Uint8Array()
 
 function ensurePointCloudCapacity(maxPointCount) {
   if (pointCloudSourcePixelIndices.length >= maxPointCount) return
@@ -66,21 +65,21 @@ function ensurePointCloudCapacity(maxPointCount) {
   pointCloudGeometry.setDrawRange(0, 0)
 }
 
-function updatePointCloudGeometry(predictedDepth) {
+function updatePointCloudGeometry(predictedDepth, personMask) {
   const width = predictedDepth.dims.at(-1)
   const height = predictedDepth.dims.at(-2)
   const maxPointCount = width * height
 
   ensurePointCloudCapacity(maxPointCount)
 
-  if (allPixelsMask.length !== maxPointCount) {
-    allPixelsMask = new Uint8Array(maxPointCount)
-    allPixelsMask.fill(1)
+  if (!personMask) {
+    pointCloudGeometry.setDrawRange(0, 0)
+    return { count: 0, width, height }
   }
 
   const { count } = backProjectDepthTo3D(
     predictedDepth,
-    { data: allPixelsMask, width, height },
+    personMask,
     createCameraIntrinsics(video.videoWidth, video.videoHeight),
     {
       positions: pointCloudPositions,
@@ -90,6 +89,7 @@ function updatePointCloudGeometry(predictedDepth) {
 
   pointCloudGeometry.attributes.position.needsUpdate = true
   pointCloudGeometry.setDrawRange(0, count)
+  pointCloudGeometry.userData.livePointCount = count
 
   return { count, width, height }
 }
@@ -173,6 +173,7 @@ visionOverlays.appendChild(depthDebugCanvas)
 const depthDebugContext = depthDebugCanvas.getContext('2d')
 let imageSegmenter
 let lastSegmentedVideoTime = -1
+let latestPersonMask = null
 
 async function loadImageSegmenter() {
   try {
@@ -196,6 +197,7 @@ function renderWebcamFrame() {
       const categoryMask = result.categoryMask
 
       if (!categoryMask) {
+        latestPersonMask = null
         webcamContext.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height)
         return
       }
@@ -215,6 +217,12 @@ function renderWebcamFrame() {
         webcamCanvas.height,
       )
       const mask = categoryMask.getAsUint8Array()
+
+      latestPersonMask = {
+        data: new Uint8Array(mask),
+        width: categoryMask.width,
+        height: categoryMask.height,
+      }
 
       for (let y = 0; y < webcamCanvas.height; y += 1) {
         const maskY = Math.floor((y / webcamCanvas.height) * categoryMask.height)
@@ -339,7 +347,16 @@ async function estimateCurrentFrame(depthEstimator) {
     depthInputCanvas.height,
   )
 
-  return depthEstimator(depthInputCanvas)
+  const personMask = latestPersonMask
+    ? {
+        data: latestPersonMask.data.slice(),
+        width: latestPersonMask.width,
+        height: latestPersonMask.height,
+      }
+    : null
+  const depthResult = await depthEstimator(depthInputCanvas)
+
+  return { depthResult, personMask }
 }
 
 function waitForNextVideoFrame() {
@@ -368,8 +385,9 @@ async function runDepthLoop(cameraReady) {
     await waitForNextVideoFrame()
 
     try {
-      const { predicted_depth: predictedDepth } =
+      const { depthResult, personMask } =
         await estimateCurrentFrame(depthEstimator)
+      const { predicted_depth: predictedDepth } = depthResult
       const stats = getDepthStats(predictedDepth)
       const { width, height, min, max } = stats
       const now = performance.now()
@@ -390,7 +408,10 @@ async function runDepthLoop(cameraReady) {
       }
 
       drawDepthDebugView(predictedDepth, stats)
-      const pointCloudFrame = updatePointCloudGeometry(predictedDepth)
+      const pointCloudFrame = updatePointCloudGeometry(
+        predictedDepth,
+        personMask,
+      )
       updatePointCloudColors(
         pointCloudFrame.count,
         pointCloudFrame.width,
@@ -402,6 +423,7 @@ async function runDepthLoop(cameraReady) {
         `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
       depthStatus.dataset.backend = activeDepthBackend
       depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
+      depthStatus.dataset.pointCount = String(pointCloudFrame.count)
     } catch (error) {
       depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
       console.error('Unable to estimate depth:', error)
