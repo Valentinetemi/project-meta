@@ -201,6 +201,21 @@ visionOverlays.appendChild(webcamCanvas)
 
 const webcamContext = webcamCanvas.getContext('2d')
 
+function drawSegmentationMessage(message) {
+  webcamContext.fillStyle = '#11151d'
+  webcamContext.fillRect(0, 0, webcamCanvas.width, webcamCanvas.height)
+  webcamContext.fillStyle = '#ffffff'
+  webcamContext.font = '14px system-ui, sans-serif'
+  webcamContext.textAlign = 'center'
+  webcamContext.fillText(
+    message,
+    webcamCanvas.width / 2,
+    webcamCanvas.height / 2,
+  )
+}
+
+drawSegmentationMessage('Loading segmentation…')
+
 const depthDebugCanvas = document.createElement('canvas')
 depthDebugCanvas.className = 'depth-debug'
 depthDebugCanvas.width = 320
@@ -212,6 +227,17 @@ const depthDebugContext = depthDebugCanvas.getContext('2d')
 let imageSegmenter
 let lastSegmentedVideoTime = -1
 let latestPersonMask = null
+let personConfidenceMaskIndex = 0
+let hasReportedSegmentationError = false
+
+function reportSegmentationError(error) {
+  if (hasReportedSegmentationError) return
+
+  hasReportedSegmentationError = true
+  latestPersonMask = null
+  drawSegmentationMessage('Segmentation failed')
+  console.error('Selfie segmentation failed:', error)
+}
 
 async function loadImageSegmenter() {
   try {
@@ -219,65 +245,100 @@ async function loadImageSegmenter() {
     imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
       baseOptions: { modelAssetPath: SELFIE_SEGMENTER_MODEL },
       runningMode: 'VIDEO',
-      outputCategoryMask: true,
-      outputConfidenceMasks: false,
+      outputCategoryMask: false,
+      outputConfidenceMasks: true,
     })
+
+    const labels = imageSegmenter.getLabels()
+    const personLabelIndex = labels.findIndex((label) =>
+      label.toLowerCase().includes('person'),
+    )
+
+    personConfidenceMaskIndex = personLabelIndex >= 0 ? personLabelIndex : 0
+    console.info('Selfie segmentation ready:', labels)
   } catch (error) {
     showCameraMessage('Selfie segmentation is unavailable.')
-    console.error('Unable to load selfie segmentation:', error)
+    reportSegmentationError(error)
   }
 }
 
 function renderWebcamFrame() {
   if (imageSegmenter && video.currentTime !== lastSegmentedVideoTime) {
     lastSegmentedVideoTime = video.currentTime
-    imageSegmenter.segmentForVideo(video, performance.now(), (result) => {
-      const categoryMask = result.categoryMask
+    try {
+      imageSegmenter.segmentForVideo(video, performance.now(), (result) => {
+        try {
+          const confidenceMasks = result.confidenceMasks
 
-      if (!categoryMask) {
-        latestPersonMask = null
-        webcamContext.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height)
-        return
-      }
+          if (!confidenceMasks?.length) {
+            throw new Error('MediaPipe returned no confidence mask.')
+          }
 
-      webcamContext.drawImage(
-        video,
-        0,
-        0,
-        webcamCanvas.width,
-        webcamCanvas.height,
-      )
+          const confidenceMask =
+            confidenceMasks[
+              Math.min(personConfidenceMaskIndex, confidenceMasks.length - 1)
+            ]
+          const confidence = confidenceMask.getAsFloat32Array()
+          const mask = new Uint8Array(confidence.length)
 
-      const frame = webcamContext.getImageData(
-        0,
-        0,
-        webcamCanvas.width,
-        webcamCanvas.height,
-      )
-      const mask = categoryMask.getAsUint8Array()
+          for (let index = 0; index < confidence.length; index += 1) {
+            mask[index] = confidence[index] >= 0.5 ? 1 : 0
+          }
 
-      latestPersonMask = {
-        data: new Uint8Array(mask),
-        width: categoryMask.width,
-        height: categoryMask.height,
-      }
+          latestPersonMask = {
+            data: mask,
+            width: confidenceMask.width,
+            height: confidenceMask.height,
+          }
 
-      for (let y = 0; y < webcamCanvas.height; y += 1) {
-        const maskY = Math.floor((y / webcamCanvas.height) * categoryMask.height)
+          webcamContext.drawImage(
+            video,
+            0,
+            0,
+            webcamCanvas.width,
+            webcamCanvas.height,
+          )
 
-        for (let x = 0; x < webcamCanvas.width; x += 1) {
-          const maskX = Math.floor((x / webcamCanvas.width) * categoryMask.width)
-          const maskIndex = maskY * categoryMask.width + maskX
-          const alphaIndex = (y * webcamCanvas.width + x) * 4 + 3
+          const frame = webcamContext.getImageData(
+            0,
+            0,
+            webcamCanvas.width,
+            webcamCanvas.height,
+          )
 
-          frame.data[alphaIndex] = mask[maskIndex] === 1 ? 255 : 0
+          for (let y = 0; y < webcamCanvas.height; y += 1) {
+            const maskY = Math.min(
+              Math.floor((y / webcamCanvas.height) * confidenceMask.height),
+              confidenceMask.height - 1,
+            )
+
+            for (let x = 0; x < webcamCanvas.width; x += 1) {
+              const maskX = Math.min(
+                Math.floor((x / webcamCanvas.width) * confidenceMask.width),
+                confidenceMask.width - 1,
+              )
+              const maskIndex = maskY * confidenceMask.width + maskX
+              const pixelIndex = (y * webcamCanvas.width + x) * 4
+
+              if (mask[maskIndex] === 0) {
+                frame.data[pixelIndex] *= 0.12
+                frame.data[pixelIndex + 1] *= 0.12
+                frame.data[pixelIndex + 2] *= 0.12
+              }
+            }
+          }
+
+          webcamContext.putImageData(frame, 0, 0)
+          hasReportedSegmentationError = false
+        } catch (error) {
+          reportSegmentationError(error)
+        } finally {
+          result.close()
         }
-      }
-
-      webcamContext.putImageData(frame, 0, 0)
-    })
-  } else if (!imageSegmenter) {
-    webcamContext.clearRect(0, 0, webcamCanvas.width, webcamCanvas.height)
+      })
+    } catch (error) {
+      reportSegmentationError(error)
+    }
   }
 
   if ('requestVideoFrameCallback' in video) {
