@@ -47,10 +47,20 @@ pointCloud.frustumCulled = false
 pointCloud.visible = false
 scene.add(pointCloud)
 
-const fpsCounter = document.createElement('p')
+const fpsCounter = document.createElement('div')
 fpsCounter.className = 'fps-counter'
 fpsCounter.setAttribute('role', 'status')
-fpsCounter.textContent = 'Depth 0.0 FPS · Render 0.0 FPS'
+
+const renderFpsReadout = document.createElement('span')
+renderFpsReadout.className = 'render-fps'
+renderFpsReadout.textContent = 'Render FPS: 0.0'
+fpsCounter.appendChild(renderFpsReadout)
+
+const depthFpsReadout = document.createElement('span')
+depthFpsReadout.className = 'depth-fps'
+depthFpsReadout.textContent = 'Depth FPS: 0.0'
+fpsCounter.appendChild(depthFpsReadout)
+
 document.body.appendChild(fpsCounter)
 
 let pointCloudPositions = new Float32Array()
@@ -166,11 +176,10 @@ function animate(now) {
   lastRenderFrameTime = now
 
   if (now - lastFpsDisplayTime >= 250) {
-    fpsCounter.textContent =
-      `Depth ${depthFrameRate.toFixed(1)} FPS · ` +
-      `Render ${renderFrameRate.toFixed(1)} FPS`
-    fpsCounter.dataset.depthFrameRate = depthFrameRate.toFixed(1)
-    fpsCounter.dataset.renderFrameRate = renderFrameRate.toFixed(1)
+    renderFpsReadout.textContent = `Render FPS: ${renderFrameRate.toFixed(1)}`
+    depthFpsReadout.textContent = `Depth FPS: ${depthFrameRate.toFixed(1)}`
+    renderFpsReadout.dataset.frameRate = renderFrameRate.toFixed(1)
+    depthFpsReadout.dataset.frameRate = depthFrameRate.toFixed(1)
     lastFpsDisplayTime = now
   }
 
@@ -578,8 +587,7 @@ async function runDepthInference(depthEstimator) {
 
     depthStatus.textContent =
       `Depth ${width}×${height} → ${pointCloudFrame.width}×${pointCloudFrame.height} · ` +
-      `${activeDepthBackend} · ` +
-      `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
+      `${activeDepthBackend} · D toggles debug`
     depthStatus.dataset.backend = activeDepthBackend
     depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
     depthStatus.dataset.pointCount = String(pointCloudFrame.count)
