@@ -20,7 +20,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100,
 )
-camera.position.z = 3
+camera.position.set(0, 0, 0)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -31,7 +31,60 @@ const cube = new THREE.Mesh(
   new THREE.BoxGeometry(1, 1, 1),
   new THREE.MeshNormalMaterial(),
 )
+cube.position.set(1.5, 0, -3)
 scene.add(cube)
+
+const pointCloudGeometry = new THREE.BufferGeometry()
+const pointCloudMaterial = new THREE.PointsMaterial({
+  color: 0xffffff,
+  size: 0.01,
+  sizeAttenuation: true,
+})
+const pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial)
+pointCloud.frustumCulled = false
+scene.add(pointCloud)
+
+let pointCloudPositions = new Float32Array()
+let pointCloudSourcePixelIndices = new Uint32Array()
+let allPixelsMask = new Uint8Array()
+
+function ensurePointCloudCapacity(maxPointCount) {
+  if (pointCloudSourcePixelIndices.length >= maxPointCount) return
+
+  pointCloudPositions = new Float32Array(maxPointCount * 3)
+  pointCloudSourcePixelIndices = new Uint32Array(maxPointCount)
+  pointCloudGeometry.setAttribute(
+    'position',
+    new THREE.BufferAttribute(pointCloudPositions, 3),
+  )
+  pointCloudGeometry.setDrawRange(0, 0)
+}
+
+function updatePointCloudGeometry(predictedDepth) {
+  const width = predictedDepth.dims.at(-1)
+  const height = predictedDepth.dims.at(-2)
+  const maxPointCount = width * height
+
+  ensurePointCloudCapacity(maxPointCount)
+
+  if (allPixelsMask.length !== maxPointCount) {
+    allPixelsMask = new Uint8Array(maxPointCount)
+    allPixelsMask.fill(1)
+  }
+
+  const { count } = backProjectDepthTo3D(
+    predictedDepth,
+    { data: allPixelsMask, width, height },
+    createCameraIntrinsics(video.videoWidth, video.videoHeight),
+    {
+      positions: pointCloudPositions,
+      sourcePixelIndices: pointCloudSourcePixelIndices,
+    },
+  )
+
+  pointCloudGeometry.attributes.position.needsUpdate = true
+  pointCloudGeometry.setDrawRange(0, count)
+}
 
 function animate() {
   cube.rotation.x += 0.01
@@ -296,6 +349,7 @@ async function runDepthLoop(cameraReady) {
       }
 
       drawDepthDebugView(predictedDepth, stats)
+      updatePointCloudGeometry(predictedDepth)
 
       depthStatus.textContent =
         `Depth ${width}×${height} · ${activeDepthBackend} · ` +
@@ -336,6 +390,7 @@ async function startCamera() {
       'Camera intrinsics (60° horizontal FOV):',
       createCameraIntrinsics(video.videoWidth, video.videoHeight),
     )
+    ensurePointCloudCapacity(video.videoWidth * video.videoHeight)
     renderWebcamFrame()
     return true
   } catch (error) {
