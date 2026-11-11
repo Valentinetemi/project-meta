@@ -44,6 +44,7 @@ const pointCloudMaterial = new THREE.PointsMaterial({
 })
 const pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial)
 pointCloud.frustumCulled = false
+pointCloud.visible = false
 scene.add(pointCloud)
 
 const fpsCounter = document.createElement('p')
@@ -61,6 +62,11 @@ let depthFrameRate = 0
 let renderFrameRate = 0
 let lastRenderFrameTime = 0
 let lastFpsDisplayTime = 0
+let latestDepthMap = null
+let depthInferenceRunning = false
+let depthSchedulerActive = false
+let lastDepthFrameTime = 0
+let hasLoggedDepthStats = false
 
 function ensurePointCloudCapacity(maxPointCount) {
   if (pointCloudSourcePixelIndices.length >= maxPointCount) return
@@ -529,17 +535,83 @@ async function estimateCurrentFrame(depthEstimator) {
   return { depthResult, personMask }
 }
 
-function waitForNextVideoFrame() {
-  return new Promise((resolve) => {
-    if ('requestVideoFrameCallback' in video) {
-      video.requestVideoFrameCallback(() => resolve())
-    } else {
-      requestAnimationFrame(() => resolve())
+async function runDepthInference(depthEstimator) {
+  try {
+    const { depthResult, personMask } =
+      await estimateCurrentFrame(depthEstimator)
+    const { predicted_depth: predictedDepth } = depthResult
+    const stats = getDepthStats(predictedDepth)
+    const { width, height, min, max } = stats
+    const now = performance.now()
+    const instantaneousFrameRate = lastDepthFrameTime
+      ? 1000 / (now - lastDepthFrameTime)
+      : 0
+
+    lastDepthFrameTime = now
+    depthFrameRate = depthFrameRate
+      ? depthFrameRate * 0.8 + instantaneousFrameRate * 0.2
+      : instantaneousFrameRate
+
+    if (!hasLoggedDepthStats) {
+      console.log(
+        `Depth output: ${width}x${height}, min=${min.toFixed(4)}, max=${max.toFixed(4)}`,
+      )
+      hasLoggedDepthStats = true
     }
-  })
+
+    drawDepthDebugView(predictedDepth, stats)
+    latestDepthMap = upsampleDepthForBackProjection(
+      predictedDepth,
+      video.videoWidth,
+      video.videoHeight,
+    )
+    const pointCloudFrame = updatePointCloudGeometry(
+      latestDepthMap,
+      personMask,
+    )
+    updatePointCloudColors(
+      pointCloudFrame.count,
+      pointCloudFrame.width,
+      pointCloudFrame.height,
+    )
+    pointCloud.visible = pointCloudFrame.count > 0
+
+    depthStatus.textContent =
+      `Depth ${width}×${height} → ${pointCloudFrame.width}×${pointCloudFrame.height} · ` +
+      `${activeDepthBackend} · ` +
+      `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
+    depthStatus.dataset.backend = activeDepthBackend
+    depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
+    depthStatus.dataset.pointCount = String(pointCloudFrame.count)
+  } catch (error) {
+    depthSchedulerActive = false
+    depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
+    console.error('Unable to estimate depth:', error)
+  } finally {
+    depthInferenceRunning = false
+  }
 }
 
-async function runDepthLoop(cameraReady) {
+function scheduleNextDepthFrame(depthEstimator) {
+  if (!depthSchedulerActive || !video.srcObject) return
+
+  const onVideoFrame = () => {
+    if (!depthInferenceRunning) {
+      depthInferenceRunning = true
+      setTimeout(() => void runDepthInference(depthEstimator), 0)
+    }
+
+    scheduleNextDepthFrame(depthEstimator)
+  }
+
+  if ('requestVideoFrameCallback' in video) {
+    video.requestVideoFrameCallback(onVideoFrame)
+  } else {
+    requestAnimationFrame(onVideoFrame)
+  }
+}
+
+async function startDepthScheduler(cameraReady) {
   const [cameraStarted, depthEstimator] = await Promise.all([
     cameraReady,
     depthModelReady,
@@ -547,64 +619,8 @@ async function runDepthLoop(cameraReady) {
 
   if (!cameraStarted || !depthEstimator) return
 
-  let lastDepthFrameTime = 0
-  let hasLoggedDepthStats = false
-
-  while (video.srcObject) {
-    await waitForNextVideoFrame()
-
-    try {
-      const { depthResult, personMask } =
-        await estimateCurrentFrame(depthEstimator)
-      const { predicted_depth: predictedDepth } = depthResult
-      const stats = getDepthStats(predictedDepth)
-      const { width, height, min, max } = stats
-      const now = performance.now()
-      const instantaneousFrameRate = lastDepthFrameTime
-        ? 1000 / (now - lastDepthFrameTime)
-        : 0
-
-      lastDepthFrameTime = now
-      depthFrameRate = depthFrameRate
-        ? depthFrameRate * 0.8 + instantaneousFrameRate * 0.2
-        : instantaneousFrameRate
-
-      if (!hasLoggedDepthStats) {
-        console.log(
-          `Depth output: ${width}x${height}, min=${min.toFixed(4)}, max=${max.toFixed(4)}`,
-        )
-        hasLoggedDepthStats = true
-      }
-
-      drawDepthDebugView(predictedDepth, stats)
-      const backProjectionDepth = upsampleDepthForBackProjection(
-        predictedDepth,
-        video.videoWidth,
-        video.videoHeight,
-      )
-      const pointCloudFrame = updatePointCloudGeometry(
-        backProjectionDepth,
-        personMask,
-      )
-      updatePointCloudColors(
-        pointCloudFrame.count,
-        pointCloudFrame.width,
-        pointCloudFrame.height,
-      )
-
-      depthStatus.textContent =
-        `Depth ${width}×${height} → ${pointCloudFrame.width}×${pointCloudFrame.height} · ` +
-        `${activeDepthBackend} · ` +
-        `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
-      depthStatus.dataset.backend = activeDepthBackend
-      depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
-      depthStatus.dataset.pointCount = String(pointCloudFrame.count)
-    } catch (error) {
-      depthStatus.textContent = `Depth inference failed · ${activeDepthBackend}`
-      console.error('Unable to estimate depth:', error)
-      return
-    }
-  }
+  depthSchedulerActive = true
+  scheduleNextDepthFrame(depthEstimator)
 }
 
 function showCameraMessage(message) {
@@ -651,7 +667,7 @@ async function startCamera() {
 }
 
 const cameraReady = startCamera()
-runDepthLoop(cameraReady)
+startDepthScheduler(cameraReady)
 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() !== 'd' || event.repeat) return
