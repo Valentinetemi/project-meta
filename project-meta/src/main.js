@@ -11,6 +11,7 @@ const MEDIAPIPE_WASM_ROOT =
 const SELFIE_SEGMENTER_MODEL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite'
 const DEPTH_MODEL = 'onnx-community/depth-anything-v2-small'
+const DEPTH_INPUT_LONG_SIDE = 256
 
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x0b0d12)
@@ -351,6 +352,19 @@ function renderWebcamFrame() {
 loadImageSegmenter()
 
 async function loadDepthModel() {
+  const configureInputSize = (depthEstimator) => {
+    const imageProcessor = depthEstimator.processor?.image_processor
+
+    if (imageProcessor) {
+      imageProcessor.size = {
+        width: DEPTH_INPUT_LONG_SIDE,
+        height: DEPTH_INPUT_LONG_SIDE,
+      }
+    }
+
+    return depthEstimator
+  }
+
   const loadForBackend = (device, label) => {
     depthStatus.textContent = `Loading Depth Anything V2 (${label})…`
 
@@ -367,7 +381,9 @@ async function loadDepthModel() {
   try {
     if ('gpu' in navigator) {
       try {
-        const depthEstimator = await loadForBackend('webgpu', 'WebGPU')
+        const depthEstimator = configureInputSize(
+          await loadForBackend('webgpu', 'WebGPU'),
+        )
         activeDepthBackend = 'WebGPU'
         depthStatus.textContent = `Depth model ready · ${activeDepthBackend}`
         return depthEstimator
@@ -377,7 +393,9 @@ async function loadDepthModel() {
       }
     }
 
-    const depthEstimator = await loadForBackend('wasm', 'WASM')
+    const depthEstimator = configureInputSize(
+      await loadForBackend('wasm', 'WASM'),
+    )
     activeDepthBackend = 'WASM'
     depthStatus.textContent = `Depth model ready · ${activeDepthBackend}`
     return depthEstimator
@@ -435,9 +453,62 @@ function drawDepthDebugView(predictedDepth, stats) {
   depthDebugContext.putImageData(imageData, 0, 0)
 }
 
+function upsampleDepthForBackProjection(
+  predictedDepth,
+  targetWidth,
+  targetHeight,
+) {
+  const sourceWidth = predictedDepth.dims.at(-1)
+  const sourceHeight = predictedDepth.dims.at(-2)
+
+  if (sourceWidth === targetWidth && sourceHeight === targetHeight) {
+    return predictedDepth
+  }
+
+  const source = predictedDepth.data
+  const upsampled = new Float32Array(targetWidth * targetHeight)
+
+  for (let y = 0; y < targetHeight; y += 1) {
+    const sourceY = ((y + 0.5) * sourceHeight) / targetHeight - 0.5
+    const y0 = Math.max(Math.floor(sourceY), 0)
+    const y1 = Math.min(y0 + 1, sourceHeight - 1)
+    const yWeight = Math.max(sourceY - y0, 0)
+
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sourceX = ((x + 0.5) * sourceWidth) / targetWidth - 0.5
+      const x0 = Math.max(Math.floor(sourceX), 0)
+      const x1 = Math.min(x0 + 1, sourceWidth - 1)
+      const xWeight = Math.max(sourceX - x0, 0)
+      const topLeft = source[y0 * sourceWidth + x0]
+      const topRight = source[y0 * sourceWidth + x1]
+      const bottomLeft = source[y1 * sourceWidth + x0]
+      const bottomRight = source[y1 * sourceWidth + x1]
+      const top = topLeft + (topRight - topLeft) * xWeight
+      const bottom = bottomLeft + (bottomRight - bottomLeft) * xWeight
+
+      upsampled[y * targetWidth + x] =
+        top + (bottom - top) * yWeight
+    }
+  }
+
+  return {
+    data: upsampled,
+    dims: [targetHeight, targetWidth],
+  }
+}
+
 async function estimateCurrentFrame(depthEstimator) {
-  depthInputCanvas.width = video.videoWidth
-  depthInputCanvas.height = video.videoHeight
+  const inputScale =
+    DEPTH_INPUT_LONG_SIDE / Math.max(video.videoWidth, video.videoHeight)
+
+  depthInputCanvas.width = Math.max(
+    1,
+    Math.round(video.videoWidth * inputScale),
+  )
+  depthInputCanvas.height = Math.max(
+    1,
+    Math.round(video.videoHeight * inputScale),
+  )
   depthInputContext.drawImage(
     video,
     0,
@@ -506,8 +577,13 @@ async function runDepthLoop(cameraReady) {
       }
 
       drawDepthDebugView(predictedDepth, stats)
-      const pointCloudFrame = updatePointCloudGeometry(
+      const backProjectionDepth = upsampleDepthForBackProjection(
         predictedDepth,
+        video.videoWidth,
+        video.videoHeight,
+      )
+      const pointCloudFrame = updatePointCloudGeometry(
+        backProjectionDepth,
         personMask,
       )
       updatePointCloudColors(
@@ -517,7 +593,8 @@ async function runDepthLoop(cameraReady) {
       )
 
       depthStatus.textContent =
-        `Depth ${width}×${height} · ${activeDepthBackend} · ` +
+        `Depth ${width}×${height} → ${pointCloudFrame.width}×${pointCloudFrame.height} · ` +
+        `${activeDepthBackend} · ` +
         `${depthFrameRate.toFixed(1)} FPS · D toggles debug`
       depthStatus.dataset.backend = activeDepthBackend
       depthStatus.dataset.frameRate = depthFrameRate.toFixed(1)
