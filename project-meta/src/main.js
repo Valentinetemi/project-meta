@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
 import { pipeline } from '@huggingface/transformers'
+import { backProjectDepthTo3D } from './back-project-depth.js'
 import { createCameraIntrinsics } from './camera-intrinsics.js'
 import './style.css'
 
