@@ -52,9 +52,19 @@ const pointCloud = new THREE.Points(pointCloudGeometry, pointCloudMaterial)
 pointCloud.frustumCulled = false
 scene.add(pointCloud)
 
+const fpsCounter = document.createElement('p')
+fpsCounter.className = 'fps-counter'
+fpsCounter.setAttribute('role', 'status')
+fpsCounter.textContent = 'Depth 0.0 FPS · Render 0.0 FPS'
+document.body.appendChild(fpsCounter)
+
 let pointCloudPositions = new Float32Array()
 let pointCloudColors = new Float32Array()
 let pointCloudSourcePixelIndices = new Uint32Array()
+let depthFrameRate = 0
+let renderFrameRate = 0
+let lastRenderFrameTime = 0
+let lastFpsDisplayTime = 0
 
 function ensurePointCloudCapacity(maxPointCount) {
   if (pointCloudSourcePixelIndices.length >= maxPointCount) return
@@ -135,7 +145,25 @@ function updatePointCloudColors(pointCount, depthWidth, depthHeight) {
   pointCloudGeometry.attributes.color.needsUpdate = true
 }
 
-function animate() {
+function animate(now) {
+  if (lastRenderFrameTime) {
+    const instantaneousFrameRate = 1000 / (now - lastRenderFrameTime)
+    renderFrameRate = renderFrameRate
+      ? renderFrameRate * 0.9 + instantaneousFrameRate * 0.1
+      : instantaneousFrameRate
+  }
+
+  lastRenderFrameTime = now
+
+  if (now - lastFpsDisplayTime >= 250) {
+    fpsCounter.textContent =
+      `Depth ${depthFrameRate.toFixed(1)} FPS · ` +
+      `Render ${renderFrameRate.toFixed(1)} FPS`
+    fpsCounter.dataset.depthFrameRate = depthFrameRate.toFixed(1)
+    fpsCounter.dataset.renderFrameRate = renderFrameRate.toFixed(1)
+    lastFpsDisplayTime = now
+  }
+
   cube.rotation.x += 0.01
   cube.rotation.y += 0.01
   controls.update()
@@ -386,7 +414,6 @@ async function runDepthLoop(cameraReady) {
 
   if (!cameraStarted || !depthEstimator) return
 
-  let depthFrameRate = 0
   let lastDepthFrameTime = 0
   let hasLoggedDepthStats = false
 

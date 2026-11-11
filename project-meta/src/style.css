@@ -70,3 +70,18 @@ canvas {
   background: rgb(0 0 0 / 70%);
   font: 14px/1.4 system-ui, sans-serif;
 }
+
+.fps-counter {
+  position: fixed;
+  z-index: 1;
+  top: 16px;
+  left: 16px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 6px;
+  color: #fff;
+  background: rgb(0 0 0 / 70%);
+  font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
